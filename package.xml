@@ -1,29 +1,37 @@
 <?xml version="1.0"?>
-<package format="2">
-  <name>sick_safetyscanners</name>
-  <version>1.0.9</version>
-  <description>Provides an Interface to read the sensor output of a SICK
-  Safety Scanner</description>
-
+<?xml-model href="http://download.ros.org/schema/package_format3.xsd" schematypens="http://www.w3.org/2001/XMLSchema"?>
+<package format="3">
+  <name>sick_safetyscanners2</name>
+  <version>1.0.4</version>
+  <description>ROS2 Driver for the SICK safetyscanners</description>
   <maintainer email="puck@fzi.de">Lennart Puck</maintainer>
-
   <author>Lennart Puck</author>
-
   <license>ALv2</license>
 
+  <buildtool_depend>ament_cmake</buildtool_depend>
+
+  <exec_depend>robot_state_publisher</exec_depend>
+  <exec_depend>rviz2</exec_depend>
+  <exec_depend>xacro</exec_depend>
+
+  <depend>boost</depend>
   <depend>diagnostic_updater</depend>
-  <depend>roscpp</depend>
+  <depend>rclcpp</depend>
+  <depend>rclcpp_lifecycle</depend>
   <depend>sensor_msgs</depend>
-  <depend>std_msgs</depend>
-  <depend>dynamic_reconfigure</depend>
-  <build_depend>message_generation</build_depend>
-  <exec_depend>message_runtime</exec_depend>
-  <buildtool_depend>catkin</buildtool_depend>
+  <depend>sick_safetyscanners_base</depend>
+  <depend>sick_safetyscanners2_interfaces</depend>
 
+  <test_depend>ament_lint_auto</test_depend>
+  <test_depend>ament_lint_common</test_depend>
 
-  <!-- The export tag contains other, unspecified, tags -->
+  <test_depend>ament_cmake_pytest</test_depend>
+  <test_depend>launch_testing_ament_cmake</test_depend>
+  <test_depend>launch_testing_ros</test_depend>
+  <test_depend>liburdfdom-tools</test_depend>
+  <test_depend>xacro</test_depend>
+
   <export>
-    <!-- Other tools can request additional information be placed here -->
-
+    <build_type>ament_cmake</build_type>
   </export>
 </package>

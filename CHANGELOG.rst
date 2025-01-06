@@ -1,106 +1,40 @@
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-Changelog for package sick_safetyscanners
+Changelog for package sick_safetyscanners2
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
-1.0.9 (2023-06-01)
+1.0.4 (2024-09-24)
 ------------------
-* added StatusOverview service
-* added ConfigMetadata service
-* add application and contamination errors to diagnostics
-* add checksums to diagnostics
-* add firmware version to diagnostics
-* Add missing map include.
-* adjusted readme for multicast and interface IP
-* adjusted launch file for interface IP
-* allowing to define multicast IPs from ROS
-* added .hpp to install directive in CMakeList
-* Contributors: Christian Wurm, Ivor Wanders, Lennart Puck, Rein Appeldoorn, Tom de Winter, Yannick de Hoop
+* possible fix for out of range
+* Add material for correct representation in Gazebo Sim.
+* Enable workin in Gazebo under humble.
+* enabled gazebo integration in urdf
+* generated description folder using RTW
+* diagnostics for lifecycle node aswell
+* refactor: combine Node and LifeCycle node implementations
+* Contributors: Dr. Denis Štogl, Lennart Puck, Nibanovic, Rein Appeldoorn
 
-1.0.8 (2021-02-02)
+1.0.3 (2021-12-22)
 ------------------
-* changed to constant values for the field data
-* changed uint to int for current config data
+* Fixes unsafe pointer access in UDP callback
+* Implement lifecycle node 
+* Added functionality to allow multicast
+* set not using the default sick angles as default
+* moved changeSensor settings to be always be invoked
+* fixed typo in launch file
+* Contributors: Brice, Erwin Lejeune, Soma Gallai, Lennart Puck, Tanmay
+
+1.0.2 (2021-03-15)
+------------------
+* added missing dependencies to package xml
 * Contributors: Lennart Puck
 
-1.0.7 (2020-11-11)
+1.0.1 (2021-03-05)
 ------------------
-* fixed parsing error in current config data
-* added intensity filter
-* fix for out of range while creating output path message
-* Contributors: Heiko, Lennart Puck
-
-1.0.6 (2020-09-21)
-------------------
-* checking if number beams is correct
-* checking if if all data is present after parsing the header
-* fix for seg fault in measurementdata
-* Remove rqt_reconfigure dep
-* Contributors: Lennart Puck, Rein Appeldoorn
-
-1.0.5 (2020-06-15)
-------------------
-* fixing correct offset in field geometries
-* Fixed error in reading chars for device name and project name
-* feat(diagnostics): Sensor state diagnostics
-  Exposes sensor hardware information and sensor state.
-* Filter out max range values to INF according to REP 117
-* Correct first initialization of m_time_offset
-* boost::asio API changes in 1.70+
-* Catch exceptions by const ref.
-* Fix error_code comparison to int.
-* Contributors: Chad Rockey, Jad Haj Mustafa, Lennart Puck, Mike Purvis, Rein Appeldoorn
-
-1.0.4 (2019-12-16)
-------------------
-* Fixed Bug with enum for interface type
-* Eoved enums in class
-  Enums are not in the class scope where they are used.
-  Prevents redefinitions and pollution of namespace.
-* Correctet variable index for username command
-* Typecode read and parsed from variable
-* Used static casts instead of implicit conversion
+* changed the parameter callback interface so its only triggered
+  when the parameters of this node are called
 * Contributors: Lennart Puck
 
-1.0.3 (2019-07-15)
-------------------
-* erasing completed frames from map. 
-* Fixed error on startup that no scan was visualised
-  The fix should prevent the node from starting without
-  publishing any data. The error appears to be related to
-  minor rounding errors, thus setting the resolution smaller then
-  the lowest resolution. But not equal start and end angles.
-  This should fix issue #11 and #12
-* added initialisation of use_pers_config
-* Merge Pull Request #9
-  Removing the possibilities to use the angles from the sensor it self.
-  Since dynamic reconfigure can only be set up for one frame.
-* removed tcp port from configuration since it can not be configured in the sensor
-* added parameter to use persistent config
-* Added methods to request persistent data from sensor
-* added all parameters to launch file
-* updated persistent and current config command and parser to use config data instead of field data
-* removed unused end angle from field data
-* added datastructure for configs
-* Fix issue with m_angle_offset.  Remove use_sick_angles
-* Use C++ STL to reduce risk of memory corruption
-* Change ReadWriteHelper to namespace functions instead of a stateless class
-* Contributors: Chad Rockey, Jonathan Meyer, Lennart Puck, NicolasLoeffler
-
-1.0.2 (2019-01-15)
-------------------
-* Read the start angle of the field data from the persistent config instead of the current config
-* Changed to 0 angle being at the front of the scan
-* Allow system to choose the host udp port from the ephemeral range.  Resolve typo -> IPAdress to IPAddress
-* Changed default frame_id name to scan
-* Change publish_frequency parameter to be skip parameter. 
-* Add time_offset parameter to adjust scan system timestamps
-* Added median reflector bit in message and code
-* Added active case number to the service call
-* Field data is returned as a vector for all fields
-* Added publisher und service server for field data and output paths
-* Added Start angle and beam resolution to field data
-
-1.0.1 (2018-10-31)
+1.0.0 (2021-01-11)
 ------------------
 
 * Initial Release

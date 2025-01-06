@@ -3,9 +3,7 @@
 // -- BEGIN LICENSE BLOCK ----------------------------------------------
 
 /*!
-*  Copyright (C) 2018, SICK AG, Waldkirch
-*  Copyright (C) 2018, FZI Forschungszentrum Informatik, Karlsruhe, Germany
-*
+*  Copyright (C) 2023, Lowpad, Bleskensgraaf, Netherlands*
 *
 * Licensed under the Apache License, Version 2.0 (the "License");
 * you may not use this file except in compliance with the License.
@@ -25,438 +23,292 @@
 
 //----------------------------------------------------------------------
 /*!
- * \file SickSafetyscanners.cpp
+ * \file SickSafetyscanners.h
  *
- * \author  Lennart Puck <puck@fzi.de>
- * \date    2018-09-24
+ * \author  Rein Appeldoorn <rein.appeldoorn@lowpad.com>
+ * \date    2023-09-07
  */
 //----------------------------------------------------------------------
 
-
-#include "sick_safetyscanners/SickSafetyscanners.h"
+#include <sick_safetyscanners2/SickSafetyscanners.hpp>
 
 namespace sick {
+rcl_interfaces::msg::SetParametersResult SickSafetyscanners::parametersCallback(
+    std::vector<rclcpp::Parameter> parameters) {
+  rcl_interfaces::msg::SetParametersResult result;
+  result.successful = true;
+  result.reason = "";
 
-SickSafetyscanners::SickSafetyscanners(
-  const packetReceivedCallbackFunction& newPacketReceivedCallbackFunction,
-  sick::datastructure::CommSettings* settings,
-  boost::asio::ip::address_v4 interface_ip)
-  : m_newPacketReceivedCallbackFunction(newPacketReceivedCallbackFunction)
-{
-  ROS_INFO("Starting SickSafetyscanners");
-  m_io_service_ptr = std::make_shared<boost::asio::io_service>();
-  if (settings->getHostIp().is_multicast())
-  {
-    ROS_INFO("Multicast Host Ip configured");
-    m_async_udp_client_ptr = std::make_shared<sick::communication::AsyncUDPClient>(
-      boost::bind(&SickSafetyscanners::processUDPPacket, this, _1),
-      boost::ref(*m_io_service_ptr),
-      settings->getHostIp(),
-      // boost::asio::ip::address_v4::from_string("192.168.1.9"),
-      interface_ip,
-      settings->getHostUdpPort());
+  bool update_sensor_config = false;
+
+  for (const auto &param : parameters) {
+    if (param.get_name().rfind("diagnostic_updater.", 0) == 0) {
+      continue;
+    }
+
+    std::stringstream ss;
+    ss << "{" << param.get_name() << ", " << param.value_to_string() << "}";
+    RCLCPP_INFO(getLogger(), "Got parameter: '%s'", ss.str().c_str());
+
+    if (param.get_name() == "frame_id") {
+      m_config.m_frame_id = param.value_to_string();
+    } else if (param.get_name() == "host_ip") {
+      m_config.m_communications_settings.host_ip =
+          boost::asio::ip::address_v4::from_string(param.value_to_string());
+      update_sensor_config = true;
+    } else if (param.get_name() == "host_udp_port") {
+      m_config.m_communications_settings.host_udp_port = param.as_int();
+      update_sensor_config = true;
+    } else if (param.get_name() == "channel") {
+      m_config.m_communications_settings.channel = param.as_int();
+      update_sensor_config = true;
+    } else if (param.get_name() == "channel_enabled") {
+      m_config.m_communications_settings.enabled = param.as_bool();
+      update_sensor_config = true;
+    } else if (param.get_name() == "skip") {
+      m_config.m_communications_settings.publishing_frequency =
+          skipToPublishFrequency(param.as_int());
+      update_sensor_config = true;
+    } else if (param.get_name() == "angle_start") {
+      m_config.m_communications_settings.start_angle =
+          sick::radToDeg(param.as_double()) - m_config.m_angle_offset;
+      update_sensor_config = true;
+    } else if (param.get_name() == "angle_end") {
+      m_config.m_communications_settings.end_angle =
+          sick::radToDeg(param.as_double()) - m_config.m_angle_offset;
+      update_sensor_config = true;
+    } else if (param.get_name() == "time_offset") {
+      m_config.m_time_offset = param.as_double();
+    } else if (param.get_name() == "general_system_state") {
+      // TODO improve
+      m_config.m_communications_settings.features =
+          (m_config.m_communications_settings.features & ~(1UL << 0)) |
+          (param.as_bool() << 0);
+      update_sensor_config = true;
+    } else if (param.get_name() == "derived_settings") {
+      m_config.m_communications_settings.features =
+          (m_config.m_communications_settings.features & ~(1UL << 1)) |
+          (param.as_bool() << 1);
+      update_sensor_config = true;
+    } else if (param.get_name() == "measurement_data") {
+      m_config.m_communications_settings.features =
+          (m_config.m_communications_settings.features & ~(1UL << 2)) |
+          (param.as_bool() << 2);
+      update_sensor_config = true;
+    } else if (param.get_name() == "intrusion_data") {
+      m_config.m_communications_settings.features =
+          (m_config.m_communications_settings.features & ~(1UL << 3)) |
+          (param.as_bool() << 3);
+      update_sensor_config = true;
+    } else if (param.get_name() == "application_io_data") {
+      m_config.m_communications_settings.features =
+          (m_config.m_communications_settings.features & ~(1UL << 4)) |
+          (param.as_bool() << 4);
+      update_sensor_config = true;
+    } else if (param.get_name() == "min_intensities") {
+      m_config.m_min_intensities = param.as_double();
+    } else {
+      throw std::runtime_error("Parameter is not dynamic reconfigurable");
+    }
   }
-  else
-  {
-    m_async_udp_client_ptr = std::make_shared<sick::communication::AsyncUDPClient>(
-      boost::bind(&SickSafetyscanners::processUDPPacket, this, _1),
-      boost::ref(*m_io_service_ptr),
-      settings->getHostUdpPort());
+
+  if (update_sensor_config) {
+    m_device->changeSensorSettings(m_config.m_communications_settings);
   }
-  settings->setHostUdpPort(
-    m_async_udp_client_ptr
-      ->getLocalPort()); // Store which port was used, needed for data request from the laser
-  m_packet_merger_ptr = std::make_shared<sick::data_processing::UDPPacketMerger>();
-  ROS_INFO("Started SickSafetyscanners");
+
+  m_config.setupMsgCreator();
+
+  return result;
 }
 
-SickSafetyscanners::~SickSafetyscanners()
-{
-  m_io_service_ptr->stop();
-  m_udp_client_thread_ptr->join();
-  m_udp_client_thread_ptr.reset();
+void SickSafetyscanners::setupCommunication(
+    std::function<void(const sick::datastructure::Data &)> callback) {
+  // Create a sensor instance
+  if (m_config.m_communications_settings.host_ip.is_multicast()) {
+    m_device = std::make_unique<sick::AsyncSickSafetyScanner>(
+        m_config.m_sensor_ip, m_config.m_tcp_port,
+        m_config.m_communications_settings, m_config.m_interface_ip, callback);
+  } else {
+    m_device = std::make_unique<sick::AsyncSickSafetyScanner>(
+        m_config.m_sensor_ip, m_config.m_tcp_port,
+        m_config.m_communications_settings, callback);
+  }
+
+  RCLCPP_INFO(getLogger(), "Communication to Sensor set up");
+
+  // Read sensor specific configurations
+  readTypeCodeSettings();
+  readMetadata();
+  readFirmwareVersion();
+
+  if (m_config.m_use_pers_conf) {
+    readPersistentConfig();
+  }
+
+  m_config.setupMsgCreator();
 }
 
-bool SickSafetyscanners::run()
-{
-  m_udp_client_thread_ptr.reset(
-    new boost::thread(boost::bind(&SickSafetyscanners::udpClientThread, this)));
+void SickSafetyscanners::stopCommunication() {
+  m_device->stop();
+  m_diagnosed_laser_scan_publisher.reset();
+  m_diagnostic_updater.reset();
+}
 
-  m_async_udp_client_ptr->runService();
+std::string boolToString(bool b) { return b ? "true" : "false"; }
+
+void SickSafetyscanners::sensorDiagnostics(
+    diagnostic_updater::DiagnosticStatusWrapper &diagnostic_status) {
+  const sick_safetyscanners2_interfaces::msg::DataHeader &header =
+      m_last_raw_msg.header;
+  if (header.timestamp_time == 0 && header.timestamp_date == 0) {
+    diagnostic_status.summary(diagnostic_msgs::msg::DiagnosticStatus::STALE,
+                              "Could not get sensor state");
+    return;
+  }
+
+  diagnostic_status.addf("Version version", "%c", header.version_version);
+  diagnostic_status.addf("Version major version", "%u",
+                         header.version_major_version);
+  diagnostic_status.addf("Version minor version", "%u",
+                         header.version_minor_version);
+  diagnostic_status.addf("Version release", "%u", header.version_release);
+  diagnostic_status.addf(
+      "Firmware version", "%s",
+      m_config.m_firmware_version.getFirmwareVersion().c_str());
+  diagnostic_status.addf("Serial number of device", "%u",
+                         header.serial_number_of_device);
+  diagnostic_status.addf("Serial number of channel plug", "%u",
+                         header.serial_number_of_channel_plug);
+  diagnostic_status.addf("App checksum", "%08X",
+                         m_config.m_metadata.getAppChecksum());
+  diagnostic_status.addf("Overall checksum", "%08X",
+                         m_config.m_metadata.getOverallChecksum());
+  diagnostic_status.addf("Channel number", "%u", header.channel_number);
+  diagnostic_status.addf("Sequence number", "%u", header.sequence_number);
+  diagnostic_status.addf("Scan number", "%u", header.scan_number);
+  diagnostic_status.addf("Timestamp date", "%u", header.timestamp_date);
+  diagnostic_status.addf("Timestamp time", "%u", header.timestamp_time);
+
+  const sick_safetyscanners2_interfaces::msg::GeneralSystemState &state =
+      m_last_raw_msg.general_system_state;
+  diagnostic_status.add("Run mode active", boolToString(state.run_mode_active));
+  diagnostic_status.add("Standby mode active",
+                        boolToString(state.standby_mode_active));
+  diagnostic_status.add("Contamination warning",
+                        boolToString(state.contamination_warning));
+  diagnostic_status.add("Contamination error",
+                        boolToString(state.contamination_error));
+  diagnostic_status.add("Reference contour status",
+                        boolToString(state.reference_contour_status));
+  diagnostic_status.add("Manipulation status",
+                        boolToString(state.manipulation_status));
+  diagnostic_status.addf("Current monitoring case no table 1", "%u",
+                         state.current_monitoring_case_no_table_1);
+  diagnostic_status.addf("Current monitoring case no table 2", "%u",
+                         state.current_monitoring_case_no_table_2);
+  diagnostic_status.addf("Current monitoring case no table 3", "%u",
+                         state.current_monitoring_case_no_table_3);
+  diagnostic_status.addf("Current monitoring case no table 4", "%u",
+                         state.current_monitoring_case_no_table_4);
+  diagnostic_status.add("Application error",
+                        boolToString(state.application_error));
+  diagnostic_status.add("Device error", boolToString(state.device_error));
+
+  if (state.device_error) {
+    diagnostic_status.summary(diagnostic_msgs::msg::DiagnosticStatus::ERROR,
+                              "Device error");
+  } else if (state.application_error) {
+    diagnostic_status.summary(diagnostic_msgs::msg::DiagnosticStatus::ERROR,
+                              "Application error");
+  } else if (state.contamination_error) {
+    diagnostic_status.summary(diagnostic_msgs::msg::DiagnosticStatus::ERROR,
+                              "Contamination error");
+  } else if (state.contamination_warning) {
+    diagnostic_status.summary(diagnostic_msgs::msg::DiagnosticStatus::WARN,
+                              "Contamination warning");
+  } else {
+    diagnostic_status.summary(diagnostic_msgs::msg::DiagnosticStatus::OK, "OK");
+  }
+}
+
+bool SickSafetyscanners::getFieldData(
+    const std::shared_ptr<
+        sick_safetyscanners2_interfaces::srv::FieldData::Request>
+        request,
+    std::shared_ptr<sick_safetyscanners2_interfaces::srv::FieldData::Response>
+        response) {
+  // Suppress warning of unused request variable due to empty request fields
+  (void)request;
+
+  std::vector<sick::datastructure::FieldData> fields;
+  m_device->requestFieldData(fields);
+
+  for (size_t i = 0; i < fields.size(); i++) {
+    sick::datastructure::FieldData field = fields.at(i);
+    sick_safetyscanners2_interfaces::msg::Field field_msg;
+
+    field_msg.start_angle =
+        degToRad(field.getStartAngle() + m_config.m_angle_offset);
+    field_msg.angular_resolution = degToRad(field.getAngularBeamResolution());
+    field_msg.protective_field = field.getIsProtectiveField();
+
+    std::vector<uint16_t> ranges = field.getBeamDistances();
+    for (size_t j = 0; j < ranges.size(); j++) {
+      field_msg.ranges.push_back(static_cast<float>(ranges.at(j)) * 1e-3);
+    }
+
+    response->fields.push_back(field_msg);
+  }
+
+  datastructure::DeviceName device_name;
+  m_device->requestDeviceName(device_name);
+  response->device_name = device_name.getDeviceName();
+
+  std::vector<sick::datastructure::MonitoringCaseData> monitoring_cases;
+  m_device->requestMonitoringCases(monitoring_cases);
+
+  for (const auto &monitoring_case : monitoring_cases) {
+    sick_safetyscanners2_interfaces::msg::MonitoringCase monitoring_case_msg;
+
+    monitoring_case_msg.monitoring_case_number =
+        monitoring_case.getMonitoringCaseNumber();
+    std::vector<uint16_t> mon_fields = monitoring_case.getFieldIndices();
+    std::vector<bool> mon_fields_valid = monitoring_case.getFieldsValid();
+    for (size_t j = 0; j < mon_fields.size(); j++) {
+      monitoring_case_msg.fields.push_back(mon_fields.at(j));
+      monitoring_case_msg.fields_valid.push_back(mon_fields_valid.at(j));
+    }
+    response->monitoring_cases.push_back(monitoring_case_msg);
+  }
+
   return true;
 }
 
-bool SickSafetyscanners::udpClientThread()
-{
-  ROS_INFO("Enter io thread");
-  m_io_work_ptr = std::make_shared<boost::asio::io_service::work>(boost::ref(*m_io_service_ptr));
-  m_io_service_ptr->run();
-  ROS_INFO("Exit io thread");
-  return true;
+void SickSafetyscanners::readTypeCodeSettings() {
+  RCLCPP_INFO(getLogger(), "Reading Type code settings");
+  sick::datastructure::TypeCode type_code;
+  m_device->requestTypeCode(type_code);
+  m_config.m_communications_settings.e_interface_type =
+      type_code.getInterfaceType();
+  m_config.m_range_min = 0.1;
+  m_config.m_range_max = type_code.getMaxRange();
 }
 
-
-void SickSafetyscanners::processTCPPacket(const sick::datastructure::PacketBuffer& buffer)
-{
-  // Not needed for current functionality, inplace for possible future developments
+void SickSafetyscanners::readPersistentConfig() {
+  RCLCPP_INFO(getLogger(), "Reading Persistent Configuration");
+  sick::datastructure::ConfigData config_data;
+  m_device->requestPersistentConfig(config_data);
+  m_config.m_communications_settings.start_angle = config_data.getStartAngle();
+  m_config.m_communications_settings.end_angle = config_data.getEndAngle();
 }
 
-void SickSafetyscanners::changeSensorSettings(const datastructure::CommSettings& settings)
-{
-  startTCPConnection(settings);
-  changeCommSettingsInColaSession(settings);
-  stopTCPConnection();
+void SickSafetyscanners::readMetadata() {
+  RCLCPP_INFO(getLogger(), "Reading Metadata");
+  m_device->requestConfigMetadata(m_config.m_metadata);
 }
 
-void SickSafetyscanners::FindSensor(const datastructure::CommSettings& settings,
-                                    uint16_t blink_time)
-{
-  startTCPConnection(settings);
-  FindSensorInColaSession(blink_time);
-  stopTCPConnection();
+void SickSafetyscanners::readFirmwareVersion() {
+  RCLCPP_INFO(getLogger(), "Reading firmware version");
+  m_device->requestFirmwareVersion(m_config.m_firmware_version);
 }
-
-void SickSafetyscanners::requestTypeCode(const datastructure::CommSettings& settings,
-                                         sick::datastructure::TypeCode& type_code)
-{
-  startTCPConnection(settings);
-  requestTypeCodeInColaSession(type_code);
-  stopTCPConnection();
-}
-
-void SickSafetyscanners::requestApplicationName(
-  const datastructure::CommSettings& settings,
-  sick::datastructure::ApplicationName& application_name)
-{
-  startTCPConnection(settings);
-  requestApplicationNameInColaSession(application_name);
-  stopTCPConnection();
-}
-void SickSafetyscanners::requestFieldData(const datastructure::CommSettings& settings,
-                                          std::vector<sick::datastructure::FieldData>& field_data)
-{
-  startTCPConnection(settings);
-  requestFieldDataInColaSession(field_data);
-  stopTCPConnection();
-}
-
-void SickSafetyscanners::requestMonitoringCases(
-  const datastructure::CommSettings& settings,
-  std::vector<sick::datastructure::MonitoringCaseData>& monitoring_cases)
-{
-  startTCPConnection(settings);
-  requestMonitoringCaseDataInColaSession(monitoring_cases);
-  stopTCPConnection();
-}
-
-void SickSafetyscanners::requestDeviceName(const datastructure::CommSettings& settings,
-                                           datastructure::DeviceName& device_name)
-{
-  startTCPConnection(settings);
-  requestDeviceNameInColaSession(device_name);
-  stopTCPConnection();
-}
-
-void SickSafetyscanners::requestSerialNumber(const datastructure::CommSettings& settings,
-                                             datastructure::SerialNumber& serial_number)
-{
-  startTCPConnection(settings);
-  requestSerialNumberInColaSession(serial_number);
-  stopTCPConnection();
-}
-
-void SickSafetyscanners::requestOrderNumber(const datastructure::CommSettings& settings,
-                                            datastructure::OrderNumber& order_number)
-{
-  startTCPConnection(settings);
-  requestOrderNumberInColaSession(order_number);
-  stopTCPConnection();
-}
-
-void SickSafetyscanners::requestProjectName(const datastructure::CommSettings& settings,
-                                            datastructure::ProjectName& project_name)
-{
-  startTCPConnection(settings);
-  requestProjectNameInColaSession(project_name);
-  stopTCPConnection();
-}
-
-void SickSafetyscanners::requestUserName(const datastructure::CommSettings& settings,
-                                         datastructure::UserName& user_name)
-{
-  startTCPConnection(settings);
-  requestUserNameInColaSession(user_name);
-  stopTCPConnection();
-}
-void SickSafetyscanners::requestFirmwareVersion(const datastructure::CommSettings& settings,
-                                                datastructure::FirmwareVersion& firmware_version)
-{
-  startTCPConnection(settings);
-  requestFirmwareVersionInColaSession(firmware_version);
-  stopTCPConnection();
-}
-
-void SickSafetyscanners::requestPersistentConfig(const datastructure::CommSettings& settings,
-                                                 sick::datastructure::ConfigData& config_data)
-{
-  startTCPConnection(settings);
-  requestPersistentConfigInColaSession(config_data);
-  stopTCPConnection();
-}
-
-void SickSafetyscanners::requestConfigMetadata(const datastructure::CommSettings& settings,
-                                               sick::datastructure::ConfigMetadata& config_metadata)
-{
-  startTCPConnection(settings);
-  requestConfigMetadataInColaSession(config_metadata);
-  stopTCPConnection();
-}
-
-void SickSafetyscanners::requestStatusOverview(const datastructure::CommSettings& settings,
-                                               sick::datastructure::StatusOverview& status_overview)
-{
-  startTCPConnection(settings);
-  requestStatusOverviewInColaSession(status_overview);
-  stopTCPConnection();
-}
-
-void SickSafetyscanners::requestDeviceStatus(const datastructure::CommSettings& settings,
-                                             sick::datastructure::DeviceStatus& device_status)
-{
-  startTCPConnection(settings);
-  requestDeviceStatusInColaSession(device_status);
-  stopTCPConnection();
-}
-
-void SickSafetyscanners::requestRequiredUserAction(
-  const datastructure::CommSettings& settings,
-  sick::datastructure::RequiredUserAction& required_user_action)
-{
-  startTCPConnection(settings);
-  requestRequiredUserActionInColaSession(required_user_action);
-  stopTCPConnection();
-}
-
-void SickSafetyscanners::startTCPConnection(const sick::datastructure::CommSettings& settings)
-{
-  std::shared_ptr<sick::communication::AsyncTCPClient> async_tcp_client =
-    std::make_shared<sick::communication::AsyncTCPClient>(
-      boost::bind(&SickSafetyscanners::processTCPPacket, this, _1),
-      boost::ref(*m_io_service_ptr),
-      settings.getSensorIp(),
-      settings.getSensorTcpPort());
-  async_tcp_client->doConnect();
-
-  m_session_ptr.reset();
-  m_session_ptr = std::make_shared<sick::cola2::Cola2Session>(async_tcp_client);
-
-  m_session_ptr->open();
-}
-
-void SickSafetyscanners::changeCommSettingsInColaSession(
-  const datastructure::CommSettings& settings)
-{
-  sick::cola2::Cola2Session::CommandPtr command_ptr =
-    std::make_shared<sick::cola2::ChangeCommSettingsCommand>(boost::ref(*m_session_ptr), settings);
-  m_session_ptr->executeCommand(command_ptr);
-}
-
-void SickSafetyscanners::requestFieldDataInColaSession(
-  std::vector<sick::datastructure::FieldData>& fields)
-{
-  sick::cola2::Cola2Session::CommandPtr command_ptr;
-
-  for (int i = 0; i < 128; i++)
-  {
-    sick::datastructure::FieldData field_data;
-
-    command_ptr = std::make_shared<sick::cola2::FieldHeaderVariableCommand>(
-      boost::ref(*m_session_ptr), field_data, i);
-    m_session_ptr->executeCommand(command_ptr);
-
-    if (field_data.getIsValid())
-    {
-      command_ptr = std::make_shared<sick::cola2::FieldGeometryVariableCommand>(
-        boost::ref(*m_session_ptr), field_data, i);
-      m_session_ptr->executeCommand(command_ptr);
-
-      fields.push_back(field_data);
-    }
-    else if (i > 0) // index 0 is reserved for contour data
-    {
-      break; // skip other requests after first invalid
-    }
-  }
-}
-
-void SickSafetyscanners::requestMonitoringCaseDataInColaSession(
-  std::vector<sick::datastructure::MonitoringCaseData>& monitoring_cases)
-{
-  sick::cola2::Cola2Session::CommandPtr command_ptr;
-  for (int i = 0; i < 254; i++)
-  {
-    sick::datastructure::MonitoringCaseData monitoring_case_data;
-
-    command_ptr = std::make_shared<sick::cola2::MonitoringCaseVariableCommand>(
-      boost::ref(*m_session_ptr), monitoring_case_data, i);
-    m_session_ptr->executeCommand(command_ptr);
-    if (monitoring_case_data.getIsValid())
-    {
-      monitoring_cases.push_back(monitoring_case_data);
-    }
-    else
-    {
-      break; // skip other requests after first invalid
-    }
-  }
-}
-
-void SickSafetyscanners::FindSensorInColaSession(uint16_t blink_time)
-{
-  sick::cola2::Cola2Session::CommandPtr command_ptr =
-    std::make_shared<sick::cola2::FindMeCommand>(boost::ref(*m_session_ptr), blink_time);
-  m_session_ptr->executeCommand(command_ptr);
-}
-
-void SickSafetyscanners::requestDeviceNameInColaSession(datastructure::DeviceName& device_name)
-{
-  sick::cola2::Cola2Session::CommandPtr command_ptr =
-    std::make_shared<sick::cola2::DeviceNameVariableCommand>(boost::ref(*m_session_ptr),
-                                                             device_name);
-  m_session_ptr->executeCommand(command_ptr);
-  ROS_INFO("Device name: %s", device_name.getDeviceName().c_str());
-}
-
-
-void SickSafetyscanners::requestApplicationNameInColaSession(
-  datastructure::ApplicationName& application_name)
-{
-  sick::cola2::Cola2Session::CommandPtr command_ptr =
-    std::make_shared<sick::cola2::ApplicationNameVariableCommand>(boost::ref(*m_session_ptr),
-                                                                  application_name);
-  m_session_ptr->executeCommand(command_ptr);
-  ROS_INFO("Application name: %s", application_name.getApplicationName().c_str());
-}
-
-void SickSafetyscanners::requestSerialNumberInColaSession(
-  datastructure::SerialNumber& serial_number)
-{
-  sick::cola2::Cola2Session::CommandPtr command_ptr =
-    std::make_shared<sick::cola2::SerialNumberVariableCommand>(boost::ref(*m_session_ptr),
-                                                               serial_number);
-  m_session_ptr->executeCommand(command_ptr);
-  ROS_INFO("Serial Number: %s", serial_number.getSerialNumber().c_str());
-}
-
-void SickSafetyscanners::requestFirmwareVersionInColaSession(
-  datastructure::FirmwareVersion& firmware_version)
-{
-  sick::cola2::Cola2Session::CommandPtr command_ptr =
-    std::make_shared<sick::cola2::FirmwareVersionVariableCommand>(boost::ref(*m_session_ptr),
-                                                                  firmware_version);
-  m_session_ptr->executeCommand(command_ptr);
-  ROS_INFO("Firmware Version: %s", firmware_version.getFirmwareVersion().c_str());
-}
-
-void SickSafetyscanners::requestTypeCodeInColaSession(sick::datastructure::TypeCode& type_code)
-{
-  sick::cola2::Cola2Session::CommandPtr command_ptr =
-    std::make_shared<sick::cola2::TypeCodeVariableCommand>(boost::ref(*m_session_ptr), type_code);
-  m_session_ptr->executeCommand(command_ptr);
-  ROS_INFO("Type Code: %s", type_code.getTypeCode().c_str());
-}
-
-void SickSafetyscanners::requestOrderNumberInColaSession(
-  sick::datastructure::OrderNumber& order_number)
-{
-  sick::cola2::Cola2Session::CommandPtr command_ptr =
-    std::make_shared<sick::cola2::OrderNumberVariableCommand>(boost::ref(*m_session_ptr),
-                                                              order_number);
-  m_session_ptr->executeCommand(command_ptr);
-  ROS_INFO("Order Number: %s", order_number.getOrderNumber().c_str());
-}
-
-void SickSafetyscanners::requestProjectNameInColaSession(
-  sick::datastructure::ProjectName& project_name)
-{
-  sick::cola2::Cola2Session::CommandPtr command_ptr =
-    std::make_shared<sick::cola2::ProjectNameVariableCommand>(boost::ref(*m_session_ptr),
-                                                              project_name);
-  m_session_ptr->executeCommand(command_ptr);
-  ROS_INFO("Project Name: %s", project_name.getProjectName().c_str());
-}
-
-void SickSafetyscanners::requestUserNameInColaSession(sick::datastructure::UserName& user_name)
-{
-  sick::cola2::Cola2Session::CommandPtr command_ptr =
-    std::make_shared<sick::cola2::UserNameVariableCommand>(boost::ref(*m_session_ptr), user_name);
-  m_session_ptr->executeCommand(command_ptr);
-  ROS_INFO("User Name: %s", user_name.getUserName().c_str());
-}
-
-void SickSafetyscanners::requestConfigMetadataInColaSession(
-  sick::datastructure::ConfigMetadata& config_metadata)
-{
-  sick::cola2::Cola2Session::CommandPtr command_ptr =
-    std::make_shared<sick::cola2::ConfigMetadataVariableCommand>(boost::ref(*m_session_ptr),
-                                                                 config_metadata);
-  m_session_ptr->executeCommand(command_ptr);
-}
-
-void SickSafetyscanners::requestStatusOverviewInColaSession(
-  sick::datastructure::StatusOverview& status_overview)
-{
-  sick::cola2::Cola2Session::CommandPtr command_ptr =
-    std::make_shared<sick::cola2::StatusOverviewVariableCommand>(boost::ref(*m_session_ptr),
-                                                                 status_overview);
-  m_session_ptr->executeCommand(command_ptr);
-}
-
-void SickSafetyscanners::requestDeviceStatusInColaSession(
-  sick::datastructure::DeviceStatus& device_status)
-{
-  sick::cola2::Cola2Session::CommandPtr command_ptr =
-    std::make_shared<sick::cola2::DeviceStatusVariableCommand>(boost::ref(*m_session_ptr),
-                                                               device_status);
-  m_session_ptr->executeCommand(command_ptr);
-}
-
-void SickSafetyscanners::requestRequiredUserActionInColaSession(
-  sick::datastructure::RequiredUserAction& required_user_action)
-{
-  sick::cola2::Cola2Session::CommandPtr command_ptr =
-    std::make_shared<sick::cola2::RequiredUserActionVariableCommand>(boost::ref(*m_session_ptr),
-                                                                     required_user_action);
-  m_session_ptr->executeCommand(command_ptr);
-}
-
-void SickSafetyscanners::requestPersistentConfigInColaSession(
-  sick::datastructure::ConfigData& config_data)
-{
-  sick::cola2::Cola2Session::CommandPtr command_ptr =
-    std::make_shared<sick::cola2::MeasurementPersistentConfigVariableCommand>(
-      boost::ref(*m_session_ptr), config_data);
-  m_session_ptr->executeCommand(command_ptr);
-}
-
-void SickSafetyscanners::stopTCPConnection()
-{
-  m_session_ptr->close();
-  m_session_ptr->doDisconnect();
-}
-
-
-void SickSafetyscanners::processUDPPacket(const sick::datastructure::PacketBuffer& buffer)
-{
-  if (m_packet_merger_ptr->addUDPPacket(buffer))
-  {
-    sick::datastructure::PacketBuffer deployed_buffer =
-      m_packet_merger_ptr->getDeployedPacketBuffer();
-    sick::data_processing::ParseData data_parser;
-    sick::datastructure::Data data = data_parser.parseUDPSequence(deployed_buffer);
-
-    m_newPacketReceivedCallbackFunction(data);
-  }
-}
-
 } // namespace sick
